@@ -8,13 +8,7 @@ dotenv.config();
 app.use(express.json());
 app.use(cors());
 
-
-app.get('/', (req, res) => {
-  res.send('Hello World!')
-})
-
 const uri = process.env.MONGODB_URI;
-
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
@@ -39,6 +33,55 @@ async function run() {
 }
 run().catch(console.dir);
 
+const db = client.db("GestorFitness");
+const forumPostsCollection = db.collection("forumPosts");
+
+// Add a new forum post
+app.post('/forum-posts', async (req, res) => {
+  try {
+    const post = req.body;
+    post.createdAt = new Date();
+    post.upvotes = 0;
+    post.downvotes = 0;
+    const result = await forumPostsCollection.insertOne(post);
+    res.status(201).send(result);
+  } catch (error) {
+    console.error("Error creating post:", error);
+    res.status(500).send({ message: "Failed to create post", error });
+  }
+});
+
+// Get all forum posts with pagination
+app.get('/forum-posts', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 6;
+    const skip = (page - 1) * limit;
+
+    const posts = await forumPostsCollection
+      .find()
+      .sort({ createdAt: -1 }) // Newest posts first
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+      
+    const total = await forumPostsCollection.countDocuments();
+    
+    res.send({ 
+      posts, 
+      total, 
+      currentPage: page, 
+      totalPages: Math.ceil(total / limit) 
+    });
+  } catch (error) {
+    console.error("Error fetching posts:", error);
+    res.status(500).send({ message: "Failed to fetch posts", error });
+  }
+});
+
+app.get('/', (req, res) => {
+  res.send('Hello World!')
+})
 
 
 app.listen(port, () => {
