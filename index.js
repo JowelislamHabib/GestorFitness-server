@@ -34,8 +34,10 @@ async function run() {
 run().catch(console.dir);
 
 const db = client.db("GestorFitness");
+const usersCollection = db.collection("user");
 const forumPostsCollection = db.collection("forumPosts");
 const forumCommentsCollection = db.collection("forumComments");
+const trainerApplicationsCollection = db.collection("trainerApplications");
 
 // Add a new forum post
 app.post('/forum-posts', async (req, res) => {
@@ -385,6 +387,110 @@ app.delete('/forum-comments/:id', checkCommentOwnership, async (req, res) => {
   } catch (error) {
     console.error("Error deleting comment:", error);
     res.status(500).send({ message: "Failed to delete comment", error });
+  }
+});
+
+// ==========================================
+// TRAINER APPLICATIONS API
+// ==========================================
+
+// Apply to become a trainer
+app.post('/trainer-applications', async (req, res) => {
+  try {
+    const application = req.body;
+    
+    // Check if an application already exists and is pending
+    const existing = await trainerApplicationsCollection.findOne({ userId: application.userId, status: "pending" });
+    if (existing) {
+      return res.status(400).send({ message: "You already have a pending application" });
+    }
+
+    application.status = "pending";
+    application.createdAt = new Date();
+    
+    const result = await trainerApplicationsCollection.insertOne(application);
+    
+    // Update user to indicate they have a pending application
+    if (ObjectId.isValid(application.userId)) {
+      await usersCollection.updateOne(
+        { _id: new ObjectId(application.userId) },
+        { $set: { trainerApplicationStatus: "pending" } }
+      );
+    }
+
+    res.status(201).send(result);
+  } catch (error) {
+    console.error("Error submitting trainer application:", error);
+    res.status(500).send({ message: "Failed to submit application", error });
+  }
+});
+
+// Get all trainer applications (Admin)
+app.get('/trainer-applications', async (req, res) => {
+  try {
+    const status = req.query.status;
+    let query = {};
+    if (status) {
+      query.status = status;
+    }
+    
+    const applications = await trainerApplicationsCollection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .toArray();
+      
+    res.send(applications);
+  } catch (error) {
+    console.error("Error fetching applications:", error);
+    res.status(500).send({ message: "Failed to fetch applications", error });
+  }
+});
+
+// Approve or Reject a trainer application (Admin)
+app.patch('/trainer-applications/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { status, feedback } = req.body;
+    
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid application ID format" });
+    }
+    
+    if (status !== "approved" && status !== "rejected") {
+      return res.status(400).send({ message: "Status must be 'approved' or 'rejected'" });
+    }
+
+    const application = await trainerApplicationsCollection.findOne({ _id: new ObjectId(id) });
+    if (!application) {
+      return res.status(404).send({ message: "Application not found" });
+    }
+
+    // Update application
+    await trainerApplicationsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status, feedback, updatedAt: new Date() } }
+    );
+    
+    // Update user role and status
+    if (ObjectId.isValid(application.userId)) {
+      const updateDoc = {
+        $set: { trainerApplicationStatus: status, feedback: feedback || "" }
+      };
+      
+      if (status === "approved") {
+        updateDoc.$set.role = "trainer";
+      }
+      
+      await usersCollection.updateOne(
+        { _id: new ObjectId(application.userId) },
+        updateDoc
+      );
+    }
+    
+    res.send({ message: `Application ${status} successfully` });
+  } catch (error) {
+    console.error("Error updating application:", error);
+    res.status(500).send({ message: "Failed to update application", error });
   }
 });
 
