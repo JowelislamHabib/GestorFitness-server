@@ -399,10 +399,18 @@ app.post('/trainer-applications', async (req, res) => {
   try {
     const application = req.body;
     
-    // Check if an application already exists and is pending
-    const existing = await trainerApplicationsCollection.findOne({ userId: application.userId, status: "pending" });
+    if (!application.userId) {
+      return res.status(400).send({ message: "User ID is required" });
+    }
+
+    // Check if an application already exists and is pending or approved
+    const existing = await trainerApplicationsCollection.findOne({ 
+      userId: application.userId, 
+      status: { $in: ["pending", "approved"] } 
+    });
+    
     if (existing) {
-      return res.status(400).send({ message: "You already have a pending application" });
+      return res.status(400).send({ message: `You already have an application with status: ${existing.status}` });
     }
 
     application.status = "pending";
@@ -429,10 +437,11 @@ app.post('/trainer-applications', async (req, res) => {
 app.get('/trainer-applications', async (req, res) => {
   try {
     const status = req.query.status;
+    const userId = req.query.userId;
     let query = {};
-    if (status) {
-      query.status = status;
-    }
+    
+    if (status) query.status = status;
+    if (userId) query.userId = userId;
     
     const applications = await trainerApplicationsCollection
       .find(query)
@@ -479,6 +488,8 @@ app.patch('/trainer-applications/:id', async (req, res) => {
       
       if (status === "approved") {
         updateDoc.$set.role = "trainer";
+      } else if (status === "rejected") {
+        updateDoc.$set.role = "user";
       }
       
       await usersCollection.updateOne(
