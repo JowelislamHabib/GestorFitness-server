@@ -571,6 +571,36 @@ app.get('/classes', async (req, res) => {
   }
 });
 
+// Get class by ID
+app.get('/classes/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid class ID format" });
+    }
+
+    const cls = await classesCollection.findOne({ _id: new ObjectId(id) });
+    if (!cls) {
+      return res.status(404).send({ message: "Class not found" });
+    }
+
+    // Dynamically attach trainer info
+    const usersCollection = db.collection("user");
+    if (cls.trainerId && cls.trainerId.length === 24) {
+      const trainer = await usersCollection.findOne({ _id: new ObjectId(cls.trainerId) });
+      if (trainer) {
+        cls.trainerName = trainer.name || cls.trainerName;
+        cls.trainerImage = trainer.image || cls.trainerImage;
+      }
+    }
+
+    res.send(cls);
+  } catch (error) {
+    console.error("Error fetching class by ID:", error);
+    res.status(500).send({ message: "Failed to fetch class", error });
+  }
+});
+
 // Update class status
 app.patch('/classes/:id/status', async (req, res) => {
   try {
