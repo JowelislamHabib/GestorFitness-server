@@ -59,19 +59,35 @@ app.get('/forum-posts', async (req, res) => {
     const authorId = req.query.authorId;
     const skip = (page - 1) * limit;
 
-    const query = {};
+    const matchQuery = {};
     if (authorId) {
-      query.authorId = authorId;
+      matchQuery.authorId = authorId;
     }
 
     const posts = await forumPostsCollection
-      .find(query)
+      .find(matchQuery)
       .sort({ createdAt: -1 }) // Newest posts first
       .skip(skip)
       .limit(limit)
       .toArray();
+
+    // Simple loop to get the latest user information using the user ID
+    const usersCollection = db.collection("user");
+    const { ObjectId } = require("mongodb");
+    
+    for (let post of posts) {
+      if (post.authorId && post.authorId.length === 24) {
+        const user = await usersCollection.findOne({ _id: new ObjectId(post.authorId) });
+        if (user) {
+          post.author = user.name || post.author;
+          post.authorEmail = user.email || post.authorEmail;
+          post.authorImage = user.image || post.authorImage;
+          post.role = user.role || post.role;
+        }
+      }
+    }
       
-    const total = await forumPostsCollection.countDocuments(query);
+    const total = await forumPostsCollection.countDocuments(matchQuery);
     
     res.send({ 
       posts, 
