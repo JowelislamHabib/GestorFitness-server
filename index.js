@@ -56,16 +56,22 @@ app.get('/forum-posts', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 6;
+    const authorId = req.query.authorId;
     const skip = (page - 1) * limit;
 
+    const query = {};
+    if (authorId) {
+      query.authorId = authorId;
+    }
+
     const posts = await forumPostsCollection
-      .find()
+      .find(query)
       .sort({ createdAt: -1 }) // Newest posts first
       .skip(skip)
       .limit(limit)
       .toArray();
       
-    const total = await forumPostsCollection.countDocuments();
+    const total = await forumPostsCollection.countDocuments(query);
     
     res.send({ 
       posts, 
