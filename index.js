@@ -38,6 +38,7 @@ const usersCollection = db.collection("user");
 const forumPostsCollection = db.collection("forumPosts");
 const forumCommentsCollection = db.collection("forumComments");
 const trainerApplicationsCollection = db.collection("trainerApplications");
+const classesCollection = db.collection("classes");
 
 // Add a new forum post
 app.post('/forum-posts', async (req, res) => {
@@ -518,12 +519,116 @@ app.patch('/trainer-applications/:id', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => {
-  res.send('Hello World!')
-})
+// ----------------------------------------------------------------------
+// CLASSES ENDPOINTS
+// ----------------------------------------------------------------------
 
+// Create a new class
+app.post('/classes', async (req, res) => {
+  try {
+    const classData = req.body;
+    classData.createdAt = new Date();
+    classData.status = "pending"; // Default status
+    
+    // Ensure numeric fields
+    if (classData.price) classData.price = parseFloat(classData.price);
+    if (classData.maxAttendees) classData.maxAttendees = parseInt(classData.maxAttendees);
+    
+    const result = await classesCollection.insertOne(classData);
+    res.status(201).send(result);
+  } catch (error) {
+    console.error("Error creating class:", error);
+    res.status(500).send({ message: "Failed to create class", error });
+  }
+});
+
+// Get all classes with optional filters
+app.get('/classes', async (req, res) => {
+  try {
+    const { status, trainerId } = req.query;
+    const query = {};
+    if (status) query.status = status;
+    if (trainerId) query.trainerId = trainerId;
+
+    const classes = await classesCollection.find(query).sort({ createdAt: -1 }).toArray();
+
+    // Dynamically attach trainer info
+    const usersCollection = db.collection("user");
+    for (let cls of classes) {
+      if (cls.trainerId && cls.trainerId.length === 24) {
+        const trainer = await usersCollection.findOne({ _id: new ObjectId(cls.trainerId) });
+        if (trainer) {
+          cls.trainerName = trainer.name || cls.trainerName;
+          cls.trainerImage = trainer.image || cls.trainerImage;
+        }
+      }
+    }
+
+    res.send(classes);
+  } catch (error) {
+    console.error("Error fetching classes:", error);
+    res.status(500).send({ message: "Failed to fetch classes", error });
+  }
+});
+
+// Update class status
+app.patch('/classes/:id/status', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { status, feedback } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid class ID format" });
+    }
+    if (!["pending", "approved", "rejected"].includes(status)) {
+      return res.status(400).send({ message: "Invalid status" });
+    }
+
+    const updateDoc = {
+      $set: { status, updatedAt: new Date() }
+    };
+    if (feedback !== undefined) {
+      updateDoc.$set.feedback = feedback;
+    }
+
+    const result = await classesCollection.updateOne(
+      { _id: new ObjectId(id) },
+      updateDoc
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ message: "Class not found" });
+    }
+    res.send({ message: "Class status updated successfully" });
+  } catch (error) {
+    console.error("Error updating class status:", error);
+    res.status(500).send({ message: "Failed to update class status", error });
+  }
+});
+
+// Delete a class
+app.delete('/classes/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid class ID format" });
+    }
+
+    const result = await classesCollection.deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ message: "Class not found" });
+    }
+    res.send({ message: "Class deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting class:", error);
+    res.status(500).send({ message: "Failed to delete class", error });
+  }
+});
+
+app.get("/", (req, res) => {
+  res.send("GestorFitness Server is running");
+});
 
 app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`)
-})
-
+  console.log(`Server is running on port: ${port}`);
+});
