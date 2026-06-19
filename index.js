@@ -116,6 +116,19 @@ app.get('/forum-posts/:id', async (req, res) => {
     if (!post) {
       return res.status(404).send({ message: "Post not found" });
     }
+
+    // Dynamically update author info from user collection
+    if (post.authorId && post.authorId.length === 24) {
+      const usersCollection = db.collection("user");
+      const user = await usersCollection.findOne({ _id: new ObjectId(post.authorId) });
+      if (user) {
+        post.author = user.name || post.author;
+        post.authorEmail = user.email || post.authorEmail;
+        post.authorImage = user.image || post.authorImage;
+        post.role = user.role || post.role;
+      }
+    }
+
     res.send(post);
   } catch (error) {
     console.error("Error fetching single post:", error);
