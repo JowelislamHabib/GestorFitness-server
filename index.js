@@ -100,6 +100,24 @@ app.get('/forum-posts', async (req, res) => {
   }
 });
 
+// Get a single forum post
+app.get('/forum-posts/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid ID format" });
+    }
+    const post = await forumPostsCollection.findOne({ _id: new ObjectId(id) });
+    if (!post) {
+      return res.status(404).send({ message: "Post not found" });
+    }
+    res.send(post);
+  } catch (error) {
+    console.error("Error fetching single post:", error);
+    res.status(500).send({ message: "Failed to fetch post", error });
+  }
+});
+
 // Middleware to check if the user is the owner of the post or an admin
 const checkPostOwnership = async (req, res, next) => {
   try {
