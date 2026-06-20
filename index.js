@@ -444,9 +444,18 @@ app.post('/trainer-applications', async (req, res) => {
     const result = await trainerApplicationsCollection.insertOne(application);
     
     // Update user to indicate they have a pending application
-    if (ObjectId.isValid(application.userId)) {
+    let userQuery = null;
+    if (application.userId) {
+      if (ObjectId.isValid(application.userId) && (typeof application.userId === 'string' && application.userId.length === 24)) {
+        userQuery = { _id: new ObjectId(application.userId) };
+      } else {
+        userQuery = { _id: application.userId };
+      }
+    }
+
+    if (userQuery) {
       await usersCollection.updateOne(
-        { _id: new ObjectId(application.userId) },
+        userQuery,
         { $set: { trainerApplicationStatus: "pending" } }
       );
     }
@@ -506,7 +515,17 @@ app.patch('/trainer-applications/:id', async (req, res) => {
     );
     
     // Update user role and status
-    if (ObjectId.isValid(application.userId)) {
+    // Update user role and status
+    let userQuery = null;
+    if (application.userId) {
+      if (ObjectId.isValid(application.userId) && (typeof application.userId === 'string' && application.userId.length === 24)) {
+        userQuery = { _id: new ObjectId(application.userId) };
+      } else {
+        userQuery = { _id: application.userId }; // better-auth stores _id as string
+      }
+    }
+
+    if (userQuery) {
       const updateDoc = {
         $set: { trainerApplicationStatus: status, feedback: feedback || "" }
       };
@@ -517,10 +536,7 @@ app.patch('/trainer-applications/:id', async (req, res) => {
         updateDoc.$set.role = "user";
       }
       
-      await usersCollection.updateOne(
-        { _id: new ObjectId(application.userId) },
-        updateDoc
-      );
+      await usersCollection.updateOne(userQuery, updateDoc);
     }
     
     res.send({ message: `Application ${status} successfully` });
