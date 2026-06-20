@@ -39,6 +39,7 @@ const forumPostsCollection = db.collection("forumPosts");
 const forumCommentsCollection = db.collection("forumComments");
 const trainerApplicationsCollection = db.collection("trainerApplications");
 const classesCollection = db.collection("classes");
+const favoriteClassesCollection = db.collection("favoriteClasses");
 
 app.get('/users', async (req, res) => {
   try {
@@ -662,6 +663,62 @@ app.delete('/classes/:id', async (req, res) => {
   } catch (error) {
     console.error("Error deleting class:", error);
     res.status(500).send({ message: "Failed to delete class", error });
+  }
+});
+
+// --- Favorite Classes Routes ---
+
+// Get all favorite class IDs for a user
+app.get('/favorite-classes/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const favorites = await favoriteClassesCollection.find({ userId }).toArray();
+    const classIds = favorites.map(f => f.classId);
+    res.send(classIds);
+  } catch (error) {
+    console.error("Error fetching favorites:", error);
+    res.status(500).send({ message: "Failed to fetch favorites", error });
+  }
+});
+
+// Add a class to favorites
+app.post('/favorite-classes', async (req, res) => {
+  try {
+    const { userId, classId } = req.body;
+    if (!userId || !classId) {
+      return res.status(400).send({ message: "userId and classId are required" });
+    }
+    
+    // Check for duplicate
+    const existing = await favoriteClassesCollection.findOne({ userId, classId });
+    if (existing) {
+      return res.status(400).send({ message: "Class is already in favorites" });
+    }
+    
+    const result = await favoriteClassesCollection.insertOne({ userId, classId, createdAt: new Date() });
+    res.send({ message: "Added to favorites", result });
+  } catch (error) {
+    console.error("Error adding favorite:", error);
+    res.status(500).send({ message: "Failed to add favorite", error });
+  }
+});
+
+// Remove a class from favorites
+app.delete('/favorite-classes', async (req, res) => {
+  try {
+    const { userId, classId } = req.query;
+    if (!userId || !classId) {
+      return res.status(400).send({ message: "userId and classId are required" });
+    }
+    
+    const result = await favoriteClassesCollection.deleteOne({ userId, classId });
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ message: "Favorite not found" });
+    }
+    res.send({ message: "Removed from favorites" });
+  } catch (error) {
+    console.error("Error removing favorite:", error);
+    res.status(500).send({ message: "Failed to remove favorite", error });
   }
 });
 
