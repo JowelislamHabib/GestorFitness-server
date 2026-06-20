@@ -40,6 +40,16 @@ const forumCommentsCollection = db.collection("forumComments");
 const trainerApplicationsCollection = db.collection("trainerApplications");
 const classesCollection = db.collection("classes");
 
+app.get('/users', async (req, res) => {
+  try {
+    const users = await usersCollection.find().toArray();
+    res.send(users);
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    res.status(500).send({ message: "Failed to fetch users", error });
+  }
+})
+
 // Add a new forum post
 app.post('/forum-posts', async (req, res) => {
   try {
