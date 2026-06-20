@@ -647,6 +647,32 @@ app.patch('/classes/:id/status', async (req, res) => {
   }
 });
 
+// Update class details
+app.patch('/classes/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid class ID format" });
+    }
+
+    const { _id, ...updateData } = req.body;
+    updateData.updatedAt = new Date();
+
+    const result = await classesCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updateData }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ message: "Class not found" });
+    }
+    res.send({ message: "Class updated successfully" });
+  } catch (error) {
+    console.error("Error updating class:", error);
+    res.status(500).send({ message: "Failed to update class", error });
+  }
+});
+
 // Delete a class
 app.delete('/classes/:id', async (req, res) => {
   try {
