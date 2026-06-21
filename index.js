@@ -482,6 +482,23 @@ app.get('/trainer-applications', async (req, res) => {
       .sort({ createdAt: -1 })
       .toArray();
       
+    // Dynamically attach user info (image)
+    const usersCollection = db.collection("user");
+    for (let app of applications) {
+      if (app.userId) {
+        let userQuery;
+        if (ObjectId.isValid(app.userId) && (typeof app.userId === 'string' && app.userId.length === 24)) {
+          userQuery = { _id: new ObjectId(app.userId) };
+        } else {
+          userQuery = { _id: app.userId };
+        }
+        const user = await usersCollection.findOne(userQuery);
+        if (user && user.image) {
+          app.image = user.image;
+        }
+      }
+    }
+      
     res.send(applications);
   } catch (error) {
     console.error("Error fetching applications:", error);
