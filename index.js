@@ -74,16 +74,31 @@ app.get('/forum-posts', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 6;
     const authorId = req.query.authorId;
+    const search = req.query.search || "";
+    const sort = req.query.sort || "newest";
+    const role = req.query.role;
     const skip = (page - 1) * limit;
 
     const matchQuery = {};
     if (authorId) {
       matchQuery.authorId = authorId;
     }
+    if (role) {
+      matchQuery.role = role;
+    }
+
+    if (search) {
+      matchQuery.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { category: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    const sortQuery = sort === "oldest" ? { createdAt: 1 } : { createdAt: -1 };
 
     const posts = await forumPostsCollection
       .find(matchQuery)
-      .sort({ createdAt: -1 }) // Newest posts first
+      .sort(sortQuery)
       .skip(skip)
       .limit(limit)
       .toArray();
