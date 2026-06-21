@@ -708,6 +708,106 @@ app.delete('/classes/:id', async (req, res) => {
   }
 });
 
+// --- Bookings Routes ---
+
+const bookingsCollection = db.collection("bookings");
+
+// Create a new booking
+app.post('/bookings', async (req, res) => {
+  try {
+    const bookingData = req.body;
+    
+    // Ensure we don't insert duplicate booking based on transactionId or sessionId
+    if (bookingData.sessionId) {
+      const existing = await bookingsCollection.findOne({ sessionId: bookingData.sessionId });
+      if (existing) {
+        return res.status(200).send({ message: "Booking already exists", result: existing });
+      }
+    }
+    
+    bookingData.createdAt = new Date();
+    bookingData.status = "paid";
+
+    const result = await bookingsCollection.insertOne(bookingData);
+    res.status(201).send(result);
+  } catch (error) {
+    console.error("Error creating booking:", error);
+    res.status(500).send({ message: "Failed to create booking", error });
+  }
+});
+
+// Helper to attach user info to bookings
+async function attachUserInfoToBookings(bookings, usersCollection) {
+  for (let booking of bookings) {
+    let userQuery = null;
+    if (booking.userId) {
+      if (ObjectId.isValid(booking.userId) && (typeof booking.userId === 'string' && booking.userId.length === 24)) {
+        userQuery = { _id: new ObjectId(booking.userId) };
+      } else {
+        userQuery = { _id: booking.userId };
+      }
+      
+      if (userQuery) {
+        const user = await usersCollection.findOne(userQuery);
+        if (user) {
+          booking.userEmail = user.email;
+          booking.userName = user.name;
+        }
+      }
+    }
+  }
+  return bookings;
+}
+
+// Helper to attach class info to bookings
+async function attachClassInfoToBookings(bookings, classesCollection) {
+  for (let booking of bookings) {
+    if (booking.classId) {
+      let classQuery = null;
+      if (ObjectId.isValid(booking.classId) && (typeof booking.classId === 'string' && booking.classId.length === 24)) {
+        classQuery = { _id: new ObjectId(booking.classId) };
+      } else {
+        classQuery = { _id: booking.classId };
+      }
+      
+      if (classQuery) {
+        const cls = await classesCollection.findOne(classQuery);
+        if (cls) {
+          booking.classDetails = cls;
+        }
+      }
+    }
+  }
+  return bookings;
+}
+
+// Get all bookings (Admin)
+app.get('/bookings', async (req, res) => {
+  try {
+    const bookings = await bookingsCollection.find().sort({ createdAt: -1 }).toArray();
+    await attachUserInfoToBookings(bookings, db.collection("user"));
+    await attachClassInfoToBookings(bookings, classesCollection);
+    res.send(bookings);
+  } catch (error) {
+    console.error("Error fetching all bookings:", error);
+    res.status(500).send({ message: "Failed to fetch bookings", error });
+  }
+});
+
+// Get all bookings for a user
+app.get('/bookings/user/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const bookings = await bookingsCollection.find({ userId }).sort({ createdAt: -1 }).toArray();
+    await attachUserInfoToBookings(bookings, db.collection("user"));
+    await attachClassInfoToBookings(bookings, classesCollection);
+    res.send(bookings);
+  } catch (error) {
+    console.error("Error fetching user bookings:", error);
+    res.status(500).send({ message: "Failed to fetch bookings", error });
+  }
+});
+
 // --- Favorite Classes Routes ---
 
 // Get all favorite class IDs for a user
