@@ -549,8 +549,12 @@ app.patch('/trainer-applications/:id', async (req, res) => {
       
       if (status === "approved") {
         updateDoc.$set.role = "trainer";
+        if (application.specialty) updateDoc.$set.specialty = application.specialty;
+        if (application.experience !== undefined) updateDoc.$set.experience = application.experience;
+        if (application.bio) updateDoc.$set.bio = application.bio;
       } else if (status === "rejected") {
         updateDoc.$set.role = "user";
+        updateDoc.$unset = { specialty: "", experience: "", bio: "" };
       }
       
       await usersCollection.updateOne(userQuery, updateDoc);
