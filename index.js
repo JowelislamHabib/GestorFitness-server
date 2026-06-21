@@ -608,12 +608,32 @@ app.post('/classes', async (req, res) => {
 // Get all classes with optional filters
 app.get('/classes', async (req, res) => {
   try {
-    const { status, trainerId } = req.query;
+    const { status, trainerId, category } = req.query;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50; // Default large for backwards compat if needed
+    const search = req.query.search || "";
+    const skip = (page - 1) * limit;
+
     const query = {};
     if (status) query.status = status;
     if (trainerId) query.trainerId = trainerId;
+    if (category && category !== "All") query.category = category;
 
-    const classes = await classesCollection.find(query).sort({ createdAt: -1 }).toArray();
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { trainerName: { $regex: search, $options: "i" } }
+      ];
+    }
+
+    const totalClasses = await classesCollection.countDocuments(query);
+    const totalPages = Math.ceil(totalClasses / limit);
+
+    const classes = await classesCollection.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
 
     // Dynamically attach trainer info and enrolled counts
     const usersCollection = db.collection("user");
@@ -632,7 +652,12 @@ app.get('/classes', async (req, res) => {
       cls.enrolledCount = enrolledCount;
     }
 
-    res.send(classes);
+    res.send({
+      classes,
+      totalClasses,
+      totalPages,
+      currentPage: page
+    });
   } catch (error) {
     console.error("Error fetching classes:", error);
     res.status(500).send({ message: "Failed to fetch classes", error });
