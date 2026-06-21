@@ -752,6 +752,7 @@ async function attachUserInfoToBookings(bookings, usersCollection) {
         if (user) {
           booking.userEmail = user.email;
           booking.userName = user.name;
+          booking.userImage = user.image;
         }
       }
     }
@@ -805,6 +806,20 @@ app.get('/bookings/user/:userId', async (req, res) => {
   } catch (error) {
     console.error("Error fetching user bookings:", error);
     res.status(500).send({ message: "Failed to fetch bookings", error });
+  }
+});
+
+// Get all bookings for a trainer's classes
+app.get('/bookings/trainer/:trainerId', async (req, res) => {
+  try {
+    const trainerId = req.params.trainerId;
+    const bookings = await bookingsCollection.find({ trainerId }).sort({ createdAt: -1 }).toArray();
+    await attachUserInfoToBookings(bookings, db.collection("user"));
+    await attachClassInfoToBookings(bookings, classesCollection);
+    res.send(bookings);
+  } catch (error) {
+    console.error("Error fetching trainer bookings:", error);
+    res.status(500).send({ message: "Failed to fetch trainer bookings", error });
   }
 });
 
