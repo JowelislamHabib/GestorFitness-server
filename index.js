@@ -579,8 +579,9 @@ app.get('/classes', async (req, res) => {
 
     const classes = await classesCollection.find(query).sort({ createdAt: -1 }).toArray();
 
-    // Dynamically attach trainer info
+    // Dynamically attach trainer info and enrolled counts
     const usersCollection = db.collection("user");
+    const bookingsCollection = db.collection("bookings");
     for (let cls of classes) {
       if (cls.trainerId && cls.trainerId.length === 24) {
         const trainer = await usersCollection.findOne({ _id: new ObjectId(cls.trainerId) });
@@ -589,6 +590,10 @@ app.get('/classes', async (req, res) => {
           cls.trainerImage = trainer.image || cls.trainerImage;
         }
       }
+      
+      // Calculate enrolledCount
+      const enrolledCount = await bookingsCollection.countDocuments({ classId: cls._id.toString() });
+      cls.enrolledCount = enrolledCount;
     }
 
     res.send(classes);
@@ -613,6 +618,7 @@ app.get('/classes/:id', async (req, res) => {
 
     // Dynamically attach trainer info
     const usersCollection = db.collection("user");
+    const bookingsCollection = db.collection("bookings");
     if (cls.trainerId && cls.trainerId.length === 24) {
       const trainer = await usersCollection.findOne({ _id: new ObjectId(cls.trainerId) });
       if (trainer) {
@@ -620,6 +626,9 @@ app.get('/classes/:id', async (req, res) => {
         cls.trainerImage = trainer.image || cls.trainerImage;
       }
     }
+      
+    const enrolledCount = await bookingsCollection.countDocuments({ classId: cls._id.toString() });
+    cls.enrolledCount = enrolledCount;
 
     res.send(cls);
   } catch (error) {
