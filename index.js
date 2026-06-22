@@ -605,6 +605,39 @@ app.post('/classes', async (req, res) => {
   }
 });
 
+// Get classes stats summary
+app.get('/classes/stats/summary', async (req, res) => {
+  try {
+    const { trainerId } = req.query;
+    const query = {};
+    if (trainerId) query.trainerId = trainerId;
+
+    const totalClasses = await classesCollection.countDocuments(query);
+    const pendingCount = await classesCollection.countDocuments({ ...query, status: "pending" });
+
+    const bookingsQuery = {};
+    if (trainerId) bookingsQuery.trainerId = trainerId;
+    const totalStudents = await db.collection("bookings").countDocuments(bookingsQuery);
+
+    let avgPrice = 0;
+    const classes = await classesCollection.find(query).project({ price: 1 }).toArray();
+    if (classes.length > 0) {
+      const sum = classes.reduce((acc, cls) => acc + (parseFloat(cls.price) || 0), 0);
+      avgPrice = sum / classes.length;
+    }
+
+    res.send({
+      totalClasses,
+      totalStudents,
+      avgPrice,
+      pendingCount
+    });
+  } catch (error) {
+    console.error("Error fetching class stats:", error);
+    res.status(500).send({ message: "Failed to fetch class stats", error });
+  }
+});
+
 // Get all classes with optional filters
 app.get('/classes', async (req, res) => {
   try {
