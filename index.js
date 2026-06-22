@@ -77,6 +77,7 @@ app.get('/forum-posts', async (req, res) => {
     const search = req.query.search || "";
     const sort = req.query.sort || "newest";
     const role = req.query.role;
+    const category = req.query.category;
     const skip = (page - 1) * limit;
 
     const matchQuery = {};
@@ -85,6 +86,9 @@ app.get('/forum-posts', async (req, res) => {
     }
     if (role) {
       matchQuery.role = role;
+    }
+    if (category && category.toLowerCase() !== "all") {
+      matchQuery.category = category;
     }
 
     if (search) {
