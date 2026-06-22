@@ -411,6 +411,37 @@ app.patch('/forum-comments/:id', checkCommentOwnership, async (req, res) => {
   }
 });
 
+// Like a comment
+app.patch('/forum-comments/:id/like', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { userId } = req.body;
+    if (!userId) return res.status(400).send({ message: "userId is required" });
+
+    const comment = await forumCommentsCollection.findOne({ _id: new ObjectId(id) });
+    if (!comment) return res.status(404).send({ message: "Comment not found" });
+
+    const likedBy = comment.likedBy || [];
+    const hasLiked = likedBy.includes(userId);
+    
+    let updateQuery;
+    if (hasLiked) {
+      updateQuery = { $pull: { likedBy: userId } };
+    } else {
+      updateQuery = { $addToSet: { likedBy: userId } };
+    }
+
+    const result = await forumCommentsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      updateQuery
+    );
+    res.send({ message: hasLiked ? "Unliked" : "Liked", result });
+  } catch (error) {
+    console.error("Error liking comment:", error);
+    res.status(500).send({ message: "Failed to like comment", error });
+  }
+});
+
 // Delete a comment
 app.delete('/forum-comments/:id', checkCommentOwnership, async (req, res) => {
   try {
