@@ -3,10 +3,19 @@ const app = express();
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const dotenv = require("dotenv");
-const port = process.env.PORT || 8000;
+const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
+
 dotenv.config();
+
+const port = process.env.PORT || 8000;
 app.use(express.json());
-app.use(cors());
+app.use(
+  cors({
+    credentials: true,
+    origin: [process.env.CLIENT_URL],
+  }),
+);
+
 
 const uri = process.env.MONGODB_URI;
 
@@ -18,6 +27,64 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   }
 });
+
+
+// ==========================================
+// JWT AUTHENTICATION MIDDLEWARES
+// ==========================================
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.CLIENT_URL || "http://localhost:3000"}/api/auth/jwks`),
+);
+
+const verifyToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer")) {
+return res.status(401).send({ message: "Unauthorized access: No token provided" });
+  }
+
+  const token = authHeader.split(" ")[1];
+  if (!token) {
+return res.status(401).send({ message: "Unauthorized access: Invalid token format" });
+  }
+
+  try {
+const { payload } = await jwtVerify(token, JWKS);
+req.user = payload;
+next();
+  } catch (error) {
+return res.status(401).send({ message: "Unauthorized access: Invalid or expired token" });
+  }
+};
+
+const verifyAdmin = async (req, res, next) => {
+  const user = req.user;
+  if (user?.role !== "admin") {
+return res.status(403).send({ message: "Forbidden: Admin access required" });
+  }
+  next();
+};
+
+const verifyTrainer = async (req, res, next) => {
+  const user = req.user;
+  
+  // Double-check the database to ensure we have the absolute latest role,
+  // bypassing the potentially stale JWT claim
+  let trueRole = user?.role;
+  try {
+      const dbUser = await usersCollection.findOne({ email: user.email });
+      if (dbUser && dbUser.role) {
+          trueRole = dbUser.role;
+      }
+  } catch (err) {
+      console.error("Failed to fetch user role from DB in verifyTrainer", err);
+  }
+
+  if (trueRole !== "trainer" && trueRole !== "admin") {
+    return res.status(403).send({ message: "Forbidden: Trainer access required" });
+  }
+  next();
+};
+// ==========================================
 
 async function run() {
   try {
@@ -41,7 +108,19 @@ const trainerApplicationsCollection = db.collection("trainerApplications");
 const classesCollection = db.collection("classes");
 const favoriteClassesCollection = db.collection("favoriteClasses");
 
-app.get('/users', async (req, res) => {
+
+// Get current user profile
+app.get('/users/me', verifyToken, async (req, res) => {
+  try {
+    const user = await usersCollection.findOne({ email: req.user.email });
+    if (!user) return res.status(404).send({ message: "User not found" });
+    res.send(user);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to fetch user profile", error });
+  }
+});
+
+app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const users = await usersCollection.find().toArray();
     res.send(users);
@@ -52,7 +131,7 @@ app.get('/users', async (req, res) => {
 })
 
 // Add a new forum post
-app.post('/forum-posts', async (req, res) => {
+app.post('/forum-posts', verifyToken, async (req, res) => {
   try {
     const post = req.body;
     post.createdAt = new Date();
@@ -171,8 +250,8 @@ app.get('/forum-posts/:id', async (req, res) => {
 const checkPostOwnership = async (req, res, next) => {
   try {
     const id = req.params.id;
-    const authorId = req.body.authorId || req.query.authorId;
-    const role = req.body.role || req.query.role;
+    const authorId = req.user?.id; // better-auth stores id in the JWT payload
+    const role = req.user?.role;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).send({ message: "Invalid post ID format" });
@@ -196,7 +275,7 @@ const checkPostOwnership = async (req, res, next) => {
 };
 
 // Update a forum post
-app.patch('/forum-posts/:id', checkPostOwnership, async (req, res) => {
+app.patch('/forum-posts/:id', verifyToken, checkPostOwnership, async (req, res) => {
   try {
     const id = req.params.id;
     const { authorId, role, ...updates } = req.body;
@@ -219,7 +298,7 @@ app.patch('/forum-posts/:id', checkPostOwnership, async (req, res) => {
 });
 
 // Delete a forum post
-app.delete('/forum-posts/:id', checkPostOwnership, async (req, res) => {
+app.delete('/forum-posts/:id', verifyToken, checkPostOwnership, async (req, res) => {
   try {
     const result = await forumPostsCollection.deleteOne({ _id: new ObjectId(req.params.id) });
     res.send(result);
@@ -230,7 +309,7 @@ app.delete('/forum-posts/:id', checkPostOwnership, async (req, res) => {
 });
 
 // Vote on a forum post
-app.post('/forum-posts/:id/vote', async (req, res) => {
+app.post('/forum-posts/:id/vote', verifyToken, async (req, res) => {
   try {
     const id = req.params.id;
     const { userId, action } = req.body;
@@ -301,8 +380,8 @@ app.post('/forum-posts/:id/vote', async (req, res) => {
 const checkCommentOwnership = async (req, res, next) => {
   try {
     const id = req.params.id;
-    const authorId = req.body.authorId || req.query.authorId;
-    const role = req.body.role || req.query.role;
+    const authorId = req.user?.id;
+    const role = req.user?.role;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).send({ message: "Invalid comment ID format" });
@@ -353,7 +432,7 @@ app.get('/forum-posts/:postId/comments', async (req, res) => {
 });
 
 // Post a comment
-app.post('/forum-posts/:postId/comments', async (req, res) => {
+app.post('/forum-posts/:postId/comments', verifyToken, async (req, res) => {
   try {
     const postId = req.params.postId;
     const { authorId, text, author, role, authorImage } = req.body;
@@ -391,7 +470,7 @@ app.post('/forum-posts/:postId/comments', async (req, res) => {
 });
 
 // Update a comment
-app.patch('/forum-comments/:id', checkCommentOwnership, async (req, res) => {
+app.patch('/forum-comments/:id', verifyToken, checkCommentOwnership, async (req, res) => {
   try {
     const id = req.params.id;
     const { text } = req.body;
@@ -412,7 +491,7 @@ app.patch('/forum-comments/:id', checkCommentOwnership, async (req, res) => {
 });
 
 // Like a comment
-app.patch('/forum-comments/:id/like', async (req, res) => {
+app.patch('/forum-comments/:id/like', verifyToken, async (req, res) => {
   try {
     const id = req.params.id;
     const { userId } = req.body;
@@ -443,7 +522,7 @@ app.patch('/forum-comments/:id/like', async (req, res) => {
 });
 
 // Delete a comment
-app.delete('/forum-comments/:id', checkCommentOwnership, async (req, res) => {
+app.delete('/forum-comments/:id', verifyToken, checkCommentOwnership, async (req, res) => {
   try {
     const id = req.params.id;
     const comment = req.comment; // attached by middleware
@@ -470,7 +549,7 @@ app.delete('/forum-comments/:id', checkCommentOwnership, async (req, res) => {
 // ==========================================
 
 // Apply to become a trainer
-app.post('/trainer-applications', async (req, res) => {
+app.post('/trainer-applications', verifyToken, async (req, res) => {
   try {
     const application = req.body;
     
@@ -518,7 +597,7 @@ app.post('/trainer-applications', async (req, res) => {
 });
 
 // Get all trainer applications (Admin)
-app.get('/trainer-applications', async (req, res) => {
+app.get('/trainer-applications', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const status = req.query.status;
     const userId = req.query.userId;
@@ -557,7 +636,7 @@ app.get('/trainer-applications', async (req, res) => {
 });
 
 // Approve or Reject a trainer application (Admin)
-app.patch('/trainer-applications/:id', async (req, res) => {
+app.patch('/trainer-applications/:id', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const id = req.params.id;
     const { status, feedback } = req.body;
@@ -622,7 +701,7 @@ app.patch('/trainer-applications/:id', async (req, res) => {
 // ----------------------------------------------------------------------
 
 // Create a new class
-app.post('/classes', async (req, res) => {
+app.post('/classes', verifyToken, verifyTrainer, async (req, res) => {
   try {
     const classData = req.body;
     classData.createdAt = new Date();
@@ -641,7 +720,7 @@ app.post('/classes', async (req, res) => {
 });
 
 // Get classes stats summary
-app.get('/classes/stats/summary', async (req, res) => {
+app.get('/classes/stats/summary', verifyToken, verifyTrainer, async (req, res) => {
   try {
     const { trainerId } = req.query;
     const query = {};
@@ -767,7 +846,7 @@ app.get('/classes/:id', async (req, res) => {
 });
 
 // Update class status
-app.patch('/classes/:id/status', async (req, res) => {
+app.patch('/classes/:id/status', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const id = req.params.id;
     const { status, feedback } = req.body;
@@ -802,7 +881,7 @@ app.patch('/classes/:id/status', async (req, res) => {
 });
 
 // Update class details
-app.patch('/classes/:id', async (req, res) => {
+app.patch('/classes/:id', verifyToken, verifyTrainer, async (req, res) => {
   try {
     const id = req.params.id;
     if (!ObjectId.isValid(id)) {
@@ -828,7 +907,7 @@ app.patch('/classes/:id', async (req, res) => {
 });
 
 // Delete a class
-app.delete('/classes/:id', async (req, res) => {
+app.delete('/classes/:id', verifyToken, verifyTrainer, async (req, res) => {
   try {
     const id = req.params.id;
     if (!ObjectId.isValid(id)) {
@@ -851,7 +930,7 @@ app.delete('/classes/:id', async (req, res) => {
 const bookingsCollection = db.collection("bookings");
 
 // Create a new booking
-app.post('/bookings', async (req, res) => {
+app.post('/bookings', verifyToken, async (req, res) => {
   try {
     const bookingData = req.body;
     
@@ -921,7 +1000,7 @@ async function attachClassInfoToBookings(bookings, classesCollection) {
 }
 
 // Get all bookings (Admin)
-app.get('/bookings', async (req, res) => {
+app.get('/bookings', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const bookings = await bookingsCollection.find().sort({ createdAt: -1 }).toArray();
     await attachUserInfoToBookings(bookings, db.collection("user"));
@@ -934,7 +1013,7 @@ app.get('/bookings', async (req, res) => {
 });
 
 // Get all bookings for a user
-app.get('/bookings/user/:userId', async (req, res) => {
+app.get('/bookings/user/:userId', verifyToken, async (req, res) => {
   try {
     const userId = req.params.userId;
     const bookings = await bookingsCollection.find({ userId }).sort({ createdAt: -1 }).toArray();
@@ -948,7 +1027,7 @@ app.get('/bookings/user/:userId', async (req, res) => {
 });
 
 // Get all bookings for a trainer's classes
-app.get('/bookings/trainer/:trainerId', async (req, res) => {
+app.get('/bookings/trainer/:trainerId', verifyToken, verifyTrainer, async (req, res) => {
   try {
     const trainerId = req.params.trainerId;
     const bookings = await bookingsCollection.find({ trainerId }).sort({ createdAt: -1 }).toArray();
@@ -964,7 +1043,7 @@ app.get('/bookings/trainer/:trainerId', async (req, res) => {
 // --- Favorite Classes Routes ---
 
 // Get all favorite class IDs for a user
-app.get('/favorite-classes/:userId', async (req, res) => {
+app.get('/favorite-classes/:userId', verifyToken, async (req, res) => {
   try {
     const userId = req.params.userId;
     const favorites = await favoriteClassesCollection.find({ userId }).toArray();
@@ -977,7 +1056,7 @@ app.get('/favorite-classes/:userId', async (req, res) => {
 });
 
 // Add a class to favorites
-app.post('/favorite-classes', async (req, res) => {
+app.post('/favorite-classes', verifyToken, async (req, res) => {
   try {
     const { userId, classId } = req.body;
     if (!userId || !classId) {
@@ -999,7 +1078,7 @@ app.post('/favorite-classes', async (req, res) => {
 });
 
 // Remove a class from favorites
-app.delete('/favorite-classes', async (req, res) => {
+app.delete('/favorite-classes', verifyToken, async (req, res) => {
   try {
     const { userId, classId } = req.query;
     if (!userId || !classId) {
