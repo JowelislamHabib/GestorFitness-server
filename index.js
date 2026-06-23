@@ -84,6 +84,19 @@ const verifyTrainer = async (req, res, next) => {
   }
   next();
 };
+
+const verifyNotBlocked = async (req, res, next) => {
+  const user = req.user;
+  try {
+      const dbUser = await usersCollection.findOne({ email: user.email });
+      if (dbUser && dbUser.isBlocked) {
+          return res.status(403).send({ message: "Action restricted by Admin" });
+      }
+  } catch (err) {
+      console.error("Failed to fetch user block status", err);
+  }
+  next();
+};
 // ==========================================
 
 async function run() {
@@ -107,6 +120,39 @@ const forumCommentsCollection = db.collection("forumComments");
 const trainerApplicationsCollection = db.collection("trainerApplications");
 const classesCollection = db.collection("classes");
 const favoriteClassesCollection = db.collection("favoriteClasses");
+const notificationsCollection = db.collection("notifications");
+
+async function notifyAdmins(message, link = null) {
+  try {
+    const admins = await usersCollection.find({ role: "admin" }).toArray();
+    const notifications = admins.map(admin => ({
+      userId: admin._id.toString(),
+      message,
+      link,
+      read: false,
+      createdAt: new Date()
+    }));
+    if (notifications.length > 0) {
+      await notificationsCollection.insertMany(notifications);
+    }
+  } catch (err) {
+    console.error("Failed to notify admins", err);
+  }
+}
+
+async function notifyUser(userId, message, link = null) {
+  try {
+    await notificationsCollection.insertOne({
+      userId: userId.toString(),
+      message,
+      link,
+      read: false,
+      createdAt: new Date()
+    });
+  } catch (err) {
+    console.error("Failed to notify user", err);
+  }
+}
 
 
 // Get current user profile
@@ -128,10 +174,81 @@ app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
     console.error("Error fetching users:", error);
     res.status(500).send({ message: "Failed to fetch users", error });
   }
-})
+});
+
+app.patch('/users/:id/block', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await usersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { isBlocked: true } }
+    );
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to block user", error });
+  }
+});
+
+app.patch('/users/:id/unblock', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await usersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { isBlocked: false } }
+    );
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to unblock user", error });
+  }
+});
+
+// ==========================================
+// NOTIFICATIONS API
+// ==========================================
+
+app.get('/notifications/:userId', verifyToken, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const notifications = await notificationsCollection
+      .find({ userId })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .toArray();
+    res.send(notifications);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to fetch notifications", error });
+  }
+});
+
+app.patch('/notifications/:id/read', verifyToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) return res.status(400).send({ message: "Invalid ID format" });
+    const result = await notificationsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { read: true } }
+    );
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to mark as read", error });
+  }
+});
+
+app.patch('/notifications/user/:userId/read-all', verifyToken, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const result = await notificationsCollection.updateMany(
+      { userId, read: false },
+      { $set: { read: true } }
+    );
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to mark all as read", error });
+  }
+});
 
 // Add a new forum post
-app.post('/forum-posts', verifyToken, async (req, res) => {
+app.post('/forum-posts', verifyToken, verifyNotBlocked, async (req, res) => {
   try {
     const post = req.body;
     post.createdAt = new Date();
@@ -432,7 +549,7 @@ app.get('/forum-posts/:postId/comments', async (req, res) => {
 });
 
 // Post a comment
-app.post('/forum-posts/:postId/comments', verifyToken, async (req, res) => {
+app.post('/forum-posts/:postId/comments', verifyToken, verifyNotBlocked, async (req, res) => {
   try {
     const postId = req.params.postId;
     const { authorId, text, author, role, authorImage } = req.body;
@@ -549,7 +666,7 @@ app.delete('/forum-comments/:id', verifyToken, checkCommentOwnership, async (req
 // ==========================================
 
 // Apply to become a trainer
-app.post('/trainer-applications', verifyToken, async (req, res) => {
+app.post('/trainer-applications', verifyToken, verifyNotBlocked, async (req, res) => {
   try {
     const application = req.body;
     
@@ -589,6 +706,9 @@ app.post('/trainer-applications', verifyToken, async (req, res) => {
       );
     }
 
+    // Notify admins
+    await notifyAdmins(`A new trainer application was submitted and is pending review.`, "/dashboard/admin/applications");
+
     res.status(201).send(result);
   } catch (error) {
     console.error("Error submitting trainer application:", error);
@@ -596,15 +716,26 @@ app.post('/trainer-applications', verifyToken, async (req, res) => {
   }
 });
 
-// Get all trainer applications (Admin)
-app.get('/trainer-applications', verifyToken, verifyAdmin, async (req, res) => {
+// Get all trainer applications
+app.get('/trainer-applications', verifyToken, async (req, res) => {
   try {
     const status = req.query.status;
-    const userId = req.query.userId;
+    const requestedUserId = req.query.userId;
     let query = {};
     
+    // If not admin, restrict to their own applications
+    if (req.user.role !== "admin") {
+      if (requestedUserId && requestedUserId !== req.user.id) {
+        return res.status(403).send({ message: "Forbidden: You can only fetch your own applications" });
+      }
+      // Force the query to only return their own applications
+      query = { userId: req.user.id };
+    } else {
+      query = {};
+      if (requestedUserId) query.userId = requestedUserId;
+    }
+    
     if (status) query.status = status;
-    if (userId) query.userId = userId;
     
     const applications = await trainerApplicationsCollection
       .find(query)
@@ -688,6 +819,14 @@ app.patch('/trainer-applications/:id', verifyToken, verifyAdmin, async (req, res
       await usersCollection.updateOne(userQuery, updateDoc);
     }
     
+    if (application.userId) {
+      await notifyUser(
+        application.userId,
+        `Your trainer application has been ${status}. ${status === 'rejected' ? 'Check feedback for details.' : 'Welcome to the team!'}`,
+        "/dashboard/user"
+      );
+    }
+    
     res.send({ message: `Application ${status} successfully` });
   } catch (error) {
     console.error("Error updating application:", error);
@@ -711,6 +850,10 @@ app.post('/classes', verifyToken, verifyTrainer, async (req, res) => {
     if (classData.maxAttendees) classData.maxAttendees = parseInt(classData.maxAttendees);
     
     const result = await classesCollection.insertOne(classData);
+    
+    // Notify admins about the new class
+    await notifyAdmins(`A new class "${classData.title}" was submitted by ${classData.trainerName || 'a trainer'} and is awaiting review.`, "/dashboard/admin/classes");
+    
     res.status(201).send(result);
   } catch (error) {
     console.error("Error creating class:", error);
@@ -872,6 +1015,16 @@ app.patch('/classes/:id/status', verifyToken, verifyAdmin, async (req, res) => {
     if (result.matchedCount === 0) {
       return res.status(404).send({ message: "Class not found" });
     }
+    
+    const cls = await classesCollection.findOne({ _id: new ObjectId(id) });
+    if (cls && cls.trainerId) {
+      await notifyUser(
+        cls.trainerId,
+        `Your class "${cls.title}" has been ${status}. ${status === 'rejected' ? 'Check feedback for details.' : ''}`,
+        "/dashboard/trainer"
+      );
+    }
+    
     res.send({ message: "Class status updated successfully" });
   } catch (error) {
     console.error("Error updating class status:", error);
@@ -929,7 +1082,7 @@ app.delete('/classes/:id', verifyToken, verifyTrainer, async (req, res) => {
 const bookingsCollection = db.collection("bookings");
 
 // Create a new booking
-app.post('/bookings', verifyToken, async (req, res) => {
+app.post('/bookings', verifyToken, verifyNotBlocked, async (req, res) => {
   try {
     const bookingData = req.body;
     
@@ -945,6 +1098,16 @@ app.post('/bookings', verifyToken, async (req, res) => {
     bookingData.status = "paid";
 
     const result = await bookingsCollection.insertOne(bookingData);
+
+    // Notify trainer about the new booking
+    if (bookingData.trainerId) {
+      await notifyUser(
+        bookingData.trainerId,
+        `You have a new student for your class "${bookingData.title}".`,
+        "/dashboard/trainer/students"
+      );
+    }
+
     res.status(201).send(result);
   } catch (error) {
     console.error("Error creating booking:", error);
@@ -1036,6 +1199,29 @@ app.get('/bookings/trainer/:trainerId', verifyToken, verifyTrainer, async (req, 
   } catch (error) {
     console.error("Error fetching trainer bookings:", error);
     res.status(500).send({ message: "Failed to fetch trainer bookings", error });
+  }
+});
+
+// Get attendees for a specific class
+app.get('/bookings/class/:classId/attendees', verifyToken, verifyTrainer, async (req, res) => {
+  try {
+    const classId = req.params.classId;
+    const bookings = await bookingsCollection.find({ classId }).toArray();
+    await attachUserInfoToBookings(bookings, db.collection("user"));
+    const attendees = bookings.map(b => ({
+      _id: b.userId,
+      name: b.userName,
+      email: b.userEmail,
+      image: b.userImage,
+      bookingId: b._id,
+      bookedAt: b.createdAt
+    }));
+    // Filter duplicates just in case
+    const uniqueAttendees = Array.from(new Map(attendees.map(a => [a._id, a])).values());
+    res.send(uniqueAttendees);
+  } catch (error) {
+    console.error("Error fetching class attendees:", error);
+    res.status(500).send({ message: "Failed to fetch class attendees", error });
   }
 });
 
