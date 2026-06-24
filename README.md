@@ -1,4 +1,4 @@
-# 🚀 GestorFitness Backend Server
+# GestorFitness Backend Server
 
 [![Node.js](https://img.shields.io/badge/Node.js-18.x-green)](https://nodejs.org/)
 [![Express.js](https://img.shields.io/badge/Express.js-Framework-lightgray)](https://expressjs.com/)
