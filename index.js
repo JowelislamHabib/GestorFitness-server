@@ -247,6 +247,27 @@ app.patch('/notifications/user/:userId/read-all', verifyToken, async (req, res) 
   }
 });
 
+app.delete('/notifications/:id', verifyToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) return res.status(400).send({ message: "Invalid ID format" });
+    const result = await notificationsCollection.deleteOne({ _id: new ObjectId(id) });
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to delete notification", error });
+  }
+});
+
+app.delete('/notifications/user/:userId', verifyToken, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const result = await notificationsCollection.deleteMany({ userId });
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to delete all notifications", error });
+  }
+});
+
 // Add a new forum post
 app.post('/forum-posts', verifyToken, verifyNotBlocked, async (req, res) => {
   try {
@@ -707,7 +728,7 @@ app.post('/trainer-applications', verifyToken, verifyNotBlocked, async (req, res
     }
 
     // Notify admins
-    await notifyAdmins(`A new trainer application was submitted and is pending review.`, "/dashboard/admin/applications");
+    await notifyAdmins(`A new trainer application was submitted and is pending review.`, "/dashboard/admin/trainers");
 
     res.status(201).send(result);
   } catch (error) {
@@ -820,10 +841,11 @@ app.patch('/trainer-applications/:id', verifyToken, verifyAdmin, async (req, res
     }
     
     if (application.userId) {
+      const redirectLink = status === "rejected" ? "/dashboard/user/apply-trainer" : "/dashboard/user";
       await notifyUser(
         application.userId,
         `Your trainer application has been ${status}. ${status === 'rejected' ? 'Check feedback for details.' : 'Welcome to the team!'}`,
-        "/dashboard/user"
+        redirectLink
       );
     }
     
