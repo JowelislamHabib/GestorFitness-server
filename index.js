@@ -166,10 +166,29 @@ app.get('/users/me', verifyToken, async (req, res) => {
   }
 });
 
+// Get all public trainers
+app.get('/trainers', async (req, res) => {
+  try {
+    const trainers = await usersCollection.find({ role: "trainer", isFeatured: true })
+      .project({ name: 1, image: 1, profileImage: 1, bio: 1, role: 1, email: 1, isFeatured: 1, specialty: 1 })
+      .sort({ _id: -1 })
+      .toArray();
+    res.send(trainers);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to fetch trainers", error });
+  }
+});
+
 app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
   try {
-    const { page, limit = 10, search = "", role = "all" } = req.query;
-    let users = await usersCollection.find().toArray();
+    const { page, limit = 10, search = "", role = "all", featured } = req.query;
+    
+    let query = {};
+    if (featured === 'true') {
+      query.isFeatured = true;
+    }
+    
+    let users = await usersCollection.find(query).sort({ _id: -1 }).toArray();
 
     if (page) {
       const pageNum = parseInt(page);
@@ -240,6 +259,20 @@ app.patch('/users/:id/unblock', verifyToken, verifyAdmin, async (req, res) => {
     res.send(result);
   } catch (error) {
     res.status(500).send({ message: "Failed to unblock user", error });
+  }
+});
+
+app.patch('/users/:id/feature', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { isFeatured } = req.body;
+    const result = await usersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { isFeatured: !!isFeatured } }
+    );
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to feature user", error });
   }
 });
 
