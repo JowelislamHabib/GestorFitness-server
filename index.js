@@ -168,7 +168,48 @@ app.get('/users/me', verifyToken, async (req, res) => {
 
 app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
   try {
-    const users = await usersCollection.find().toArray();
+    const { page, limit = 10, search = "", role = "all" } = req.query;
+    let users = await usersCollection.find().toArray();
+
+    if (page) {
+      const pageNum = parseInt(page);
+      const limitNum = parseInt(limit);
+
+      // Compute global stats before filtering
+      const stats = {
+        totalUsers: users.length,
+        totalTrainers: users.filter(u => u.role === "trainer").length,
+        totalAdmins: users.filter(u => u.role === "admin").length,
+        blockedUsers: users.filter(u => u.isBlocked).length
+      };
+
+      // Search filter
+      if (search) {
+        const s = search.toLowerCase();
+        users = users.filter(user => 
+          user.name?.toLowerCase().includes(s) || user.email?.toLowerCase().includes(s)
+        );
+      }
+
+      // Role filter
+      if (role && role !== "all") {
+        users = users.filter(user => user.role === role);
+      }
+
+      const total = users.length;
+      const totalPages = Math.ceil(total / limitNum) || 1;
+      const skip = (pageNum - 1) * limitNum;
+      const paginatedData = users.slice(skip, skip + limitNum);
+
+      return res.send({
+        data: paginatedData,
+        total,
+        totalPages,
+        currentPage: pageNum,
+        stats
+      });
+    }
+
     res.send(users);
   } catch (error) {
     console.error("Error fetching users:", error);
@@ -756,13 +797,11 @@ app.get('/trainer-applications', verifyToken, async (req, res) => {
       if (requestedUserId) query.userId = requestedUserId;
     }
     
-    if (status) query.status = status;
-    
     const applications = await trainerApplicationsCollection
       .find(query)
       .sort({ createdAt: -1 })
       .toArray();
-      
+
     // Dynamically attach user info (image)
     const usersCollection = db.collection("user");
     for (let app of applications) {
@@ -779,8 +818,42 @@ app.get('/trainer-applications', verifyToken, async (req, res) => {
         }
       }
     }
+
+    const { page, limit = 10 } = req.query;
+    if (page) {
+      const pageNum = parseInt(page);
+      const limitNum = parseInt(limit);
       
-    res.send(applications);
+      const stats = {
+        totalApps: applications.length,
+        pending: applications.filter(a => a.status === "pending").length,
+        rejected: applications.filter(a => a.status === "rejected").length,
+      };
+
+      let filteredApps = applications;
+      if (status) {
+        filteredApps = filteredApps.filter(a => a.status === status);
+      }
+
+      const total = filteredApps.length;
+      const totalPages = Math.ceil(total / limitNum) || 1;
+      const skip = (pageNum - 1) * limitNum;
+      const paginatedData = filteredApps.slice(skip, skip + limitNum);
+
+      return res.send({
+        data: paginatedData,
+        total,
+        totalPages,
+        currentPage: pageNum,
+        stats
+      });
+    }
+
+    let filteredApps = applications;
+    if (status) {
+      filteredApps = filteredApps.filter(a => a.status === status);
+    }
+    res.send(filteredApps);
   } catch (error) {
     console.error("Error fetching applications:", error);
     res.status(500).send({ message: "Failed to fetch applications", error });
@@ -1183,13 +1256,88 @@ async function attachClassInfoToBookings(bookings, classesCollection) {
   return bookings;
 }
 
+// Helper to filter, compute stats, and paginate bookings
+function processBookings(bookings, query, currentUserEmail, role) {
+  const pageNum = parseInt(query.page);
+  const limitNum = parseInt(query.limit);
+  
+  // If no pagination requested, just return as array for backward compatibility
+  if (!query.page) {
+    return bookings;
+  }
+
+  let filtered = bookings;
+
+  // Search filter
+  if (query.search) {
+    const s = query.search.toLowerCase();
+    filtered = filtered.filter(tx => {
+      const idMatch = tx.transactionId?.toLowerCase().includes(s) || tx.sessionId?.toLowerCase().includes(s);
+      const emailMatch = tx.userEmail?.toLowerCase().includes(s) || tx.userName?.toLowerCase().includes(s);
+      const titleMatch = (tx.title || tx.classDetails?.title)?.toLowerCase().includes(s);
+      return idMatch || emailMatch || titleMatch;
+    });
+  }
+
+  // Date filter
+  if (query.dateFilter && query.dateFilter !== "all") {
+    const days = parseInt(query.dateFilter);
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - days);
+    filtered = filtered.filter(tx => {
+      if (!tx.createdAt) return false;
+      return new Date(tx.createdAt) >= cutoffDate;
+    });
+  }
+
+  // Compute stats
+  const isIncome = (tx) => {
+    if (role === "user") return false;
+    return !currentUserEmail || tx.userEmail !== currentUserEmail;
+  };
+  const isExpense = (tx) => {
+    if (role === "user") return true;
+    return currentUserEmail && tx.userEmail === currentUserEmail;
+  };
+
+  const incomeTxs = filtered.filter(isIncome);
+  const expenseTxs = filtered.filter(isExpense);
+
+  const stats = {
+    totalRevenue: filtered.reduce((sum, tx) => sum + (tx.price || 0), 0),
+    totalEarnings: incomeTxs.reduce((sum, tx) => sum + (tx.price || 0), 0),
+    totalSpent: expenseTxs.reduce((sum, tx) => sum + (tx.price || 0), 0),
+    totalTransactions: filtered.length,
+    uniqueUsers: new Set(filtered.map(tx => tx.userEmail).filter(Boolean)).size,
+    incomeCount: incomeTxs.length,
+    expenseCount: expenseTxs.length,
+    totalStudents: filtered.length,
+    paidEnrollments: filtered.filter(s => s.status === "paid").length,
+    uniqueClassesCount: new Set(filtered.map(s => s.title || s.classDetails?.title).filter(Boolean)).size
+  };
+
+  const total = filtered.length;
+  const totalPages = Math.ceil(total / limitNum) || 1;
+  const skip = (pageNum - 1) * limitNum;
+  const paginatedData = filtered.slice(skip, skip + limitNum);
+
+  return {
+    data: paginatedData,
+    total,
+    totalPages,
+    currentPage: pageNum,
+    stats
+  };
+}
+
 // Get all bookings (Admin)
 app.get('/bookings', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const bookings = await bookingsCollection.find().sort({ createdAt: -1 }).toArray();
     await attachUserInfoToBookings(bookings, db.collection("user"));
     await attachClassInfoToBookings(bookings, classesCollection);
-    res.send(bookings);
+    const result = processBookings(bookings, req.query, req.user?.email, "admin");
+    res.send(result);
   } catch (error) {
     console.error("Error fetching all bookings:", error);
     res.status(500).send({ message: "Failed to fetch bookings", error });
@@ -1203,10 +1351,37 @@ app.get('/bookings/user/:userId', verifyToken, async (req, res) => {
     const bookings = await bookingsCollection.find({ userId }).sort({ createdAt: -1 }).toArray();
     await attachUserInfoToBookings(bookings, db.collection("user"));
     await attachClassInfoToBookings(bookings, classesCollection);
-    res.send(bookings);
+    const result = processBookings(bookings, req.query, req.user?.email, "user");
+    res.send(result);
   } catch (error) {
     console.error("Error fetching user bookings:", error);
     res.status(500).send({ message: "Failed to fetch bookings", error });
+  }
+});
+
+// Get combined bookings for a trainer (sales and purchases)
+app.get('/bookings/trainer-and-user/:id', verifyToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const bookings = await bookingsCollection.find({ 
+      $or: [{ userId: id }, { trainerId: id }] 
+    }).sort({ createdAt: -1 }).toArray();
+    
+    // Deduplicate by _id or sessionId just in case
+    const uniqueBookingsMap = new Map();
+    for (const b of bookings) {
+      uniqueBookingsMap.set(b._id ? b._id.toString() : b.sessionId, b);
+    }
+    const uniqueBookings = Array.from(uniqueBookingsMap.values());
+    uniqueBookings.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    await attachUserInfoToBookings(uniqueBookings, db.collection("user"));
+    await attachClassInfoToBookings(uniqueBookings, classesCollection);
+    const result = processBookings(uniqueBookings, req.query, req.user?.email, "trainer");
+    res.send(result);
+  } catch (error) {
+    console.error("Error fetching combined bookings:", error);
+    res.status(500).send({ message: "Failed to fetch combined bookings", error });
   }
 });
 
@@ -1217,7 +1392,8 @@ app.get('/bookings/trainer/:trainerId', verifyToken, verifyTrainer, async (req, 
     const bookings = await bookingsCollection.find({ trainerId }).sort({ createdAt: -1 }).toArray();
     await attachUserInfoToBookings(bookings, db.collection("user"));
     await attachClassInfoToBookings(bookings, classesCollection);
-    res.send(bookings);
+    const result = processBookings(bookings, req.query, req.user?.email, "trainer");
+    res.send(result);
   } catch (error) {
     console.error("Error fetching trainer bookings:", error);
     res.status(500).send({ message: "Failed to fetch trainer bookings", error });
