@@ -276,6 +276,49 @@ app.patch('/users/:id/feature', verifyToken, verifyAdmin, async (req, res) => {
   }
 });
 
+// Demote a trainer back to regular user (Admin)
+app.patch('/users/:id/demote', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    // Verify the user exists and is actually a trainer
+    const user = await usersCollection.findOne({ _id: new ObjectId(id) });
+    if (!user) {
+      return res.status(404).send({ message: "User not found" });
+    }
+    if (user.role !== "trainer") {
+      return res.status(400).send({ message: "User is not a trainer" });
+    }
+
+    // Demote: set role to "user", clear trainer-specific fields
+    await usersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: { role: "user", trainerApplicationStatus: "rejected", isFeatured: false },
+        $unset: { specialty: "", experience: "", bio: "" }
+      }
+    );
+
+    // Also update the related trainer application if one exists
+    await trainerApplicationsCollection.updateMany(
+      { userId: id, status: "approved" },
+      { $set: { status: "rejected", feedback: "Demoted by Admin", updatedAt: new Date() } }
+    );
+
+    // Notify the demoted user
+    await notifyUser(
+      id,
+      "Your trainer role has been revoked by an admin. You have been returned to a regular user.",
+      "/dashboard/user"
+    );
+
+    res.send({ message: "Trainer demoted successfully" });
+  } catch (error) {
+    console.error("Error demoting trainer:", error);
+    res.status(500).send({ message: "Failed to demote trainer", error });
+  }
+});
+
 // ==========================================
 // NOTIFICATIONS API
 // ==========================================
