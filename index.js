@@ -1601,15 +1601,40 @@ app.delete('/favorite-classes', verifyToken, async (req, res) => {
 // Get categories (query: type, status)
 app.get('/categories', async (req, res) => {
   try {
-    const { type, status } = req.query;
+    const { type, status, page, limit } = req.query;
     let query = {};
     if (type) query.type = type;
     if (status) query.status = status;
     
-    // If not admin, we might only want approved, but let's just let the query dictate it.
-    // The client should request status=approved for dropdowns.
-    const categories = await categoriesCollection.find(query).sort({ createdAt: -1 }).toArray();
-    res.send(categories);
+    if (page || limit) {
+      const pageNumber = parseInt(page) || 1;
+      const limitNumber = parseInt(limit) || 10;
+      const skip = (pageNumber - 1) * limitNumber;
+
+      const [data, total, pendingTotal, approvedTotal, classesTotal] = await Promise.all([
+        categoriesCollection.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNumber).toArray(),
+        categoriesCollection.countDocuments(query),
+        categoriesCollection.countDocuments({ status: "pending" }),
+        categoriesCollection.countDocuments({ status: "approved" }),
+        categoriesCollection.countDocuments({ type: "class" })
+      ]);
+
+      res.send({
+        data,
+        total,
+        totalPages: Math.ceil(total / limitNumber),
+        currentPage: pageNumber,
+        stats: {
+          total: await categoriesCollection.countDocuments(),
+          pending: pendingTotal,
+          approved: approvedTotal,
+          classes: classesTotal
+        }
+      });
+    } else {
+      const categories = await categoriesCollection.find(query).sort({ createdAt: -1 }).toArray();
+      res.send(categories);
+    }
   } catch (error) {
     console.error("Error fetching categories:", error);
     res.status(500).send({ message: "Failed to fetch categories", error });
