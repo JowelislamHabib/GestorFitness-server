@@ -1604,7 +1604,13 @@ app.get('/categories', async (req, res) => {
     const { type, status, page, limit } = req.query;
     let query = {};
     if (type) query.type = type;
-    if (status) query.status = status;
+    if (status) {
+      if (status.includes(',')) {
+        query.status = { $in: status.split(',') };
+      } else {
+        query.status = status;
+      }
+    }
     
     if (page || limit) {
       const pageNumber = parseInt(page) || 1;
@@ -1656,7 +1662,7 @@ app.post('/categories', verifyToken, async (req, res) => {
     });
     
     if (existing) {
-      return res.status(400).send({ message: "Category already exists" });
+      return res.status(400).send({ message: "This category has already been suggested or exists." });
     }
 
     const category = {
