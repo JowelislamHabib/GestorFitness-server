@@ -106,12 +106,14 @@ async function run() {
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    
+    // Seed initial database collections
+    await seedCategories();
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
   }
 }
-run().catch(console.dir);
 
 const db = client.db("GestorFitness");
 const usersCollection = db.collection("user");
@@ -121,6 +123,45 @@ const trainerApplicationsCollection = db.collection("trainerApplications");
 const classesCollection = db.collection("classes");
 const favoriteClassesCollection = db.collection("favoriteClasses");
 const notificationsCollection = db.collection("notifications");
+const categoriesCollection = db.collection("categories");
+
+async function seedCategories() {
+  try {
+    const count = await categoriesCollection.countDocuments();
+    if (count === 0) {
+      const initialCategories = [
+        { name: "Yoga", type: "class", status: "approved", createdAt: new Date() },
+        { name: "Strength", type: "class", status: "approved", createdAt: new Date() },
+        { name: "Cardio", type: "class", status: "approved", createdAt: new Date() },
+        { name: "Flexibility", type: "class", status: "approved", createdAt: new Date() },
+        { name: "CrossFit", type: "class", status: "approved", createdAt: new Date() },
+        { name: "HIIT", type: "class", status: "approved", createdAt: new Date() },
+        { name: "Recovery", type: "class", status: "approved", createdAt: new Date() },
+        { name: "Pilates", type: "class", status: "approved", createdAt: new Date() },
+        
+        { name: "Yoga", type: "forum", status: "approved", createdAt: new Date() },
+        { name: "Strength Training", type: "forum", status: "approved", createdAt: new Date() },
+        { name: "Cardio", type: "forum", status: "approved", createdAt: new Date() },
+        { name: "CrossFit", type: "forum", status: "approved", createdAt: new Date() },
+        { name: "HIIT", type: "forum", status: "approved", createdAt: new Date() },
+        { name: "Recovery", type: "forum", status: "approved", createdAt: new Date() },
+        { name: "Pilates", type: "forum", status: "approved", createdAt: new Date() },
+
+        { name: "Yoga & Flexibility", type: "specialty", status: "approved", createdAt: new Date() },
+        { name: "Weightlifting & Strength", type: "specialty", status: "approved", createdAt: new Date() },
+        { name: "Cardio & HIIT", type: "specialty", status: "approved", createdAt: new Date() },
+        { name: "Pilates", type: "specialty", status: "approved", createdAt: new Date() },
+        { name: "Martial Arts", type: "specialty", status: "approved", createdAt: new Date() },
+      ];
+      await categoriesCollection.insertMany(initialCategories);
+      console.log("Database seeded with initial categories.");
+    }
+  } catch (err) {
+    console.error("Failed to seed categories:", err);
+  }
+}
+
+run().catch(console.dir);
 
 async function notifyAdmins(message, link = null) {
   try {
@@ -1552,6 +1593,103 @@ app.delete('/favorite-classes', verifyToken, async (req, res) => {
   } catch (error) {
     console.error("Error removing favorite:", error);
     res.status(500).send({ message: "Failed to remove favorite", error });
+  }
+});
+
+// --- Categories Routes ---
+
+// Get categories (query: type, status)
+app.get('/categories', async (req, res) => {
+  try {
+    const { type, status } = req.query;
+    let query = {};
+    if (type) query.type = type;
+    if (status) query.status = status;
+    
+    // If not admin, we might only want approved, but let's just let the query dictate it.
+    // The client should request status=approved for dropdowns.
+    const categories = await categoriesCollection.find(query).sort({ createdAt: -1 }).toArray();
+    res.send(categories);
+  } catch (error) {
+    console.error("Error fetching categories:", error);
+    res.status(500).send({ message: "Failed to fetch categories", error });
+  }
+});
+
+// Create a new category (suggestion)
+app.post('/categories', verifyToken, async (req, res) => {
+  try {
+    const { name, type } = req.body;
+    if (!name || !type) {
+      return res.status(400).send({ message: "Name and type are required" });
+    }
+    
+    // Check if category already exists case-insensitively
+    const existing = await categoriesCollection.findOne({ 
+      name: { $regex: new RegExp(`^${name}$`, "i") },
+      type 
+    });
+    
+    if (existing) {
+      return res.status(400).send({ message: "Category already exists" });
+    }
+
+    const category = {
+      name,
+      type,
+      status: "pending",
+      createdBy: req.user.id,
+      createdAt: new Date()
+    };
+    
+    const result = await categoriesCollection.insertOne(category);
+    
+    // Notify admins
+    await notifyAdmins(`New ${type} category suggestion: "${name}"`, "/dashboard/admin/categories");
+    
+    res.status(201).send({ message: "Category suggested successfully", result });
+  } catch (error) {
+    console.error("Error suggesting category:", error);
+    res.status(500).send({ message: "Failed to suggest category", error });
+  }
+});
+
+// Update category status (Admin only)
+app.patch('/categories/:id/status', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { status } = req.body;
+    if (!status || !["approved", "rejected", "pending"].includes(status)) {
+      return res.status(400).send({ message: "Valid status is required" });
+    }
+    
+    if (!ObjectId.isValid(id)) return res.status(400).send({ message: "Invalid ID format" });
+    
+    const result = await categoriesCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status, updatedAt: new Date() } }
+    );
+    
+    res.send({ message: `Category ${status} successfully`, result });
+  } catch (error) {
+    console.error("Error updating category status:", error);
+    res.status(500).send({ message: "Failed to update category", error });
+  }
+});
+
+// Delete category (Admin only)
+app.delete('/categories/:id', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) return res.status(400).send({ message: "Invalid ID format" });
+    
+    const result = await categoriesCollection.deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 0) return res.status(404).send({ message: "Category not found" });
+    
+    res.send({ message: "Category deleted successfully", result });
+  } catch (error) {
+    console.error("Error deleting category:", error);
+    res.status(500).send({ message: "Failed to delete category", error });
   }
 });
 
