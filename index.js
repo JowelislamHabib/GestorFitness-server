@@ -435,6 +435,21 @@ app.post('/forum-posts', verifyToken, verifyNotBlocked, async (req, res) => {
     post.downvotes = 0;
     post.upvotedBy = [];
     post.downvotedBy = [];
+
+    // Generate unique slug
+    if (post.title) {
+      let baseSlug = post.title.toLowerCase().trim().replace(/[^\w\s-]/g, '').replace(/[\s_-]+/g, '-').replace(/^-+|-+$/g, '');
+      if (!baseSlug) baseSlug = "post";
+      
+      let uniqueSlug = baseSlug;
+      let counter = 1;
+      while (await forumPostsCollection.findOne({ slug: uniqueSlug })) {
+        uniqueSlug = `${baseSlug}-${counter}`;
+        counter++;
+      }
+      post.slug = uniqueSlug;
+    }
+
     const result = await forumPostsCollection.insertOne(post);
     res.status(201).send(result);
   } catch (error) {
@@ -511,14 +526,24 @@ app.get('/forum-posts', async (req, res) => {
   }
 });
 
-// Get a single forum post
-app.get('/forum-posts/:id', async (req, res) => {
+// Get a single forum post by id or slug
+app.get('/forum-posts/:slug', async (req, res) => {
   try {
-    const id = req.params.id;
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).send({ message: "Invalid ID format" });
+    const idOrSlug = req.params.slug;
+    let query;
+
+    if (ObjectId.isValid(idOrSlug) && String(new ObjectId(idOrSlug)) === idOrSlug) {
+      query = { _id: new ObjectId(idOrSlug) };
+    } else {
+      query = { slug: idOrSlug };
     }
-    const post = await forumPostsCollection.findOne({ _id: new ObjectId(id) });
+
+    let post = await forumPostsCollection.findOne(query);
+
+    if (!post && query._id) {
+      post = await forumPostsCollection.findOne({ slug: idOrSlug });
+    }
+
     if (!post) {
       return res.status(404).send({ message: "Post not found" });
     }
@@ -1061,6 +1086,20 @@ app.post('/classes', verifyToken, verifyTrainer, async (req, res) => {
     if (classData.price) classData.price = parseFloat(classData.price);
     if (classData.maxAttendees) classData.maxAttendees = parseInt(classData.maxAttendees);
     
+    // Generate unique slug
+    if (classData.title) {
+      let baseSlug = classData.title.toLowerCase().trim().replace(/[^\w\s-]/g, '').replace(/[\s_-]+/g, '-').replace(/^-+|-+$/g, '');
+      if (!baseSlug) baseSlug = "class";
+      
+      let uniqueSlug = baseSlug;
+      let counter = 1;
+      while (await classesCollection.findOne({ slug: uniqueSlug })) {
+        uniqueSlug = `${baseSlug}-${counter}`;
+        counter++;
+      }
+      classData.slug = uniqueSlug;
+    }
+    
     const result = await classesCollection.insertOne(classData);
     
     // Notify admins about the new class
@@ -1165,15 +1204,24 @@ app.get('/classes', async (req, res) => {
   }
 });
 
-// Get class by ID
-app.get('/classes/:id', async (req, res) => {
+// Get a single class by id or slug
+app.get('/classes/:slug', async (req, res) => {
   try {
-    const id = req.params.id;
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).send({ message: "Invalid class ID format" });
+    const idOrSlug = req.params.slug;
+    let query;
+
+    if (ObjectId.isValid(idOrSlug) && String(new ObjectId(idOrSlug)) === idOrSlug) {
+      query = { _id: new ObjectId(idOrSlug) };
+    } else {
+      query = { slug: idOrSlug };
     }
 
-    const cls = await classesCollection.findOne({ _id: new ObjectId(id) });
+    let cls = await classesCollection.findOne(query);
+
+    if (!cls && query._id) {
+      cls = await classesCollection.findOne({ slug: idOrSlug });
+    }
+
     if (!cls) {
       return res.status(404).send({ message: "Class not found" });
     }
